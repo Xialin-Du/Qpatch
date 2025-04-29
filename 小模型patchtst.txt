@@ -1,0 +1,129 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
+import pandas as pd
+import numpy as np
+from neuralforecast.models import PatchTST
+from neuralforecast.core import NeuralForecast
+import matplotlib.pyplot as plt
+from neuralforecast.losses.numpy import mae, rmse, mse
+import torch
+
+
+torch.set_float32_matmul_precision('medium')
+torch.manual_seed(42)
+np.random.seed(42)
+
+# 数据读取部分，在实验环节中，可根据需要进行替换
+df = pd.read_excel('data.xlsx')
+df['unique_id'] = 1
+df = df.rename(columns={'date': 'ds', 'Close': 'y'})
+df['ds'] = pd.to_datetime(df['ds'])
+y_mean = df['y'].mean()
+y_std = df['y'].std()
+df['y'] = (df['y'] - y_mean) / y_std
+
+# 模型设置
+horizon = 1
+input_size = 25
+train_steps = 3000
+check_steps = 10
+models = [
+    PatchTST(
+        h=horizon,
+        input_size=input_size,
+        max_steps=train_steps,
+        val_check_steps=check_steps,
+        early_stop_patience_steps=3,
+        start_padding_enabled=True,
+        accelerator='gpu'
+    )
+]
+nf = NeuralForecast(
+    models=models,
+    freq='B'
+)
+
+#模型验证
+Y_hat_df = nf.cross_validation(
+    df=df,
+    val_size=1210,
+    test_size=1210,
+    n_windows=None
+)
+
+Y_hat_df['y'] = Y_hat_df['y'] * y_std + y_mean
+Y_hat_df['PatchTST'] = Y_hat_df['PatchTST'] * y_std + y_mean
+
+threshold_df = pd.read_excel('yuzhi200.xlsx', usecols=['ds', 'lower', 'upper'])
+threshold_df['ds'] = pd.to_datetime(threshold_df['ds'])
+
+print("阈值文件前5个日期:\n", threshold_df['ds'].head().to_string(index=False))
+print("\n预测数据前5个日期:\n", Y_hat_df['ds'].head().to_string(index=False))
+
+Y_hat_df = Y_hat_df.merge(threshold_df, on='ds', how='left')
+assert not Y_hat_df[['lower', 'upper']].isnull().any().any(), "阈值文件与预测数据日期未对齐"
+
+# 预测值调整函数
+def adjust_prediction(row):
+    pred = row['PatchTST']
+    lower = row['lower']
+    upper = row['upper']
+    if pred < lower:
+        return lower
+    elif pred > upper:
+        return upper
+    else:
+        return pred
+
+Y_hat_df['adjusted_PatchTST'] = Y_hat_df.apply(adjust_prediction, axis=1)
+
+
+# 计算评估指标
+def calculate_smape(y_true, y_pred):
+    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2
+    non_zero_indices = denominator != 0
+    return 100 * np.mean(np.abs(y_true[non_zero_indices] - y_pred[non_zero_indices]) / denominator[non_zero_indices])
+
+smape_original = calculate_smape(Y_hat_df['y'].values, Y_hat_df['PatchTST'].values)
+smape_adjusted = calculate_smape(Y_hat_df['y'].values, Y_hat_df['adjusted_PatchTST'].values)
+
+print(f"[原始预测] 对称MAPE: {smape_original:.2f}%")
+print(f"[调整后预测] 对称MAPE: {smape_adjusted:.2f}%")
+
+
+Y_plot = Y_hat_df.copy()
+cutoffs = Y_plot['cutoff'].unique()[::horizon]
+Y_plot = Y_plot[Y_plot['cutoff'].isin(cutoffs)]
+
+# 结果可视化 
+plt.figure(figsize=(20, 5))
+plt.plot(Y_plot['ds'], Y_plot['y'], label='True', color='black')
+plt.plot(Y_plot['ds'], Y_plot['PatchTST'], label='PatchTST', alpha=0.7)
+plt.plot(Y_plot['ds'], Y_plot['adjusted_PatchTST'], label='adjusted_PatchTST', alpha=0.7)
+
+rmse_value = rmse(Y_hat_df['y'], Y_hat_df['PatchTST'])
+rmse_value_adj = rmse(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
+mae_value = mae(Y_hat_df['y'], Y_hat_df['PatchTST'])
+mae_value_adj = mae(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
+mse_value = mse(Y_hat_df['y'], Y_hat_df['PatchTST'])
+mse_value_adj = mse(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
+
+total_fitted = len(Y_hat_df)  # 直接取DataFrame的行数
+
+print(f'评估指标:')
+print(f'RMSE: {rmse_value:.4f}')
+print(f'MAE: {mae_value:.4f}')
+print(f'MSE: {mse_value:.4f}')
+print(f'RMSE: {rmse_value_adj:.4f}')
+print(f'MAE: {mae_value_adj:.4f}')
+print(f'MSE: {mse_value_adj:.4f}')
+print(f'总拟合数值数量: {total_fitted}')  # 新增输出行
+print("阈值文件起始日期:", threshold_df['ds'].min())
+print("预测数据起始日期:", Y_hat_df['ds'].min())
+plt.xlabel('Date')
+plt.ylabel('Network traffic')
+plt.title('Network traffic Prediction using PatchTST')
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
