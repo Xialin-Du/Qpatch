@@ -1,0 +1,161 @@
+import os
+# 设置环境变量来解决OpenMP警告
+os.environ['KMP_DUPLICATE_LIB_OK']='TRUE'
+
+import pandas as pd
+import numpy as np
+from neuralforecast.models import PatchTST
+from neuralforecast.core import NeuralForecast
+import matplotlib.pyplot as plt
+from neuralforecast.losses.numpy import mae, rmse, mse
+import torch
+
+# 设置torch精度
+torch.set_float32_matmul_precision('medium')
+
+# 设置随机种子
+torch.manual_seed(42)
+np.random.seed(42)
+
+# 读取数据
+df = pd.read_excel('data.xlsx')
+df['unique_id'] = 1
+df = df.rename(columns={'date': 'ds', 'Close': 'y'})
+df['ds'] = pd.to_datetime(df['ds'])
+
+# 数据归一化
+y_mean = df['y'].mean()
+y_std = df['y'].std()
+df['y'] = (df['y'] - y_mean) / y_std
+
+# 设置参数
+horizon = 1
+input_size = 25
+train_steps = 3000
+check_steps = 10
+
+# 初始化模型
+models = [
+    PatchTST(
+        h=horizon,
+        input_size=input_size,
+        max_steps=train_steps,
+        val_check_steps=check_steps,
+        early_stop_patience_steps=3,
+        start_padding_enabled=True,
+        accelerator='gpu'
+    )
+]
+
+# 创建NeuralForecast实例并训练
+nf = NeuralForecast(
+    models=models,
+    freq='B'
+)
+
+# 进行交叉验证
+Y_hat_df = nf.cross_validation(
+    df=df,
+    val_size=1210,
+    test_size=1210,
+    n_windows=None
+)
+
+# 反归一化数据（确保阈值作用于原始尺度）
+Y_hat_df['y'] = Y_hat_df['y'] * y_std + y_mean
+Y_hat_df['PatchTST'] = Y_hat_df['PatchTST'] * y_std + y_mean
+
+# 读取阈值文件（假设阈值文件包含日期列 'ds'）
+threshold_df = pd.read_excel('yuzhi200.xlsx', usecols=['ds', 'lower', 'upper'])
+threshold_df['ds'] = pd.to_datetime(threshold_df['ds'])
+
+print("阈值文件前5个日期:\n", threshold_df['ds'].head().to_string(index=False))
+# 打印预测数据的前5个日期
+print("\n预测数据前5个日期:\n", Y_hat_df['ds'].head().to_string(index=False))
+
+
+# 按日期合并阈值到预测数据
+Y_hat_df = Y_hat_df.merge(threshold_df, on='ds', how='left')
+assert not Y_hat_df[['lower', 'upper']].isnull().any().any(), "阈值文件与预测数据日期未对齐"
+
+
+# 调整预测值：仅当预测值超出阈值时修正
+def adjust_prediction(row):
+    pred = row['PatchTST']
+    lower = row['lower']
+    upper = row['upper']
+    # 只有当预测值超出阈值时才调整
+    if pred < lower:
+        return lower
+    elif pred > upper:
+        return upper
+    else:
+        return pred
+
+Y_hat_df['adjusted_PatchTST'] = Y_hat_df.apply(adjust_prediction, axis=1)
+
+
+# 计算评估指标（使用对称MAPE避免负值问题）
+def calculate_smape(y_true, y_pred):
+    denominator = (np.abs(y_true) + np.abs(y_pred)) / 2
+    non_zero_indices = denominator != 0
+    return 100 * np.mean(np.abs(y_true[non_zero_indices] - y_pred[non_zero_indices]) / denominator[non_zero_indices])
+
+smape_original = calculate_smape(Y_hat_df['y'].values, Y_hat_df['PatchTST'].values)
+smape_adjusted = calculate_smape(Y_hat_df['y'].values, Y_hat_df['adjusted_PatchTST'].values)
+
+print(f"[原始预测] 对称MAPE: {smape_original:.2f}%")
+print(f"[调整后预测] 对称MAPE: {smape_adjusted:.2f}%")
+
+
+# 数据筛选
+Y_plot = Y_hat_df.copy()
+cutoffs = Y_plot['cutoff'].unique()[::horizon]
+Y_plot = Y_plot[Y_plot['cutoff'].isin(cutoffs)]
+
+# 绘图
+plt.figure(figsize=(20, 5))
+plt.plot(Y_plot['ds'], Y_plot['y'], label='True', color='black')
+plt.plot(Y_plot['ds'], Y_plot['PatchTST'], label='PatchTST', alpha=0.7)
+plt.plot(Y_plot['ds'], Y_plot['adjusted_PatchTST'], label='adjusted_PatchTST', alpha=0.7)
+
+
+# ...（前面的代码保持不变，直到评估指标部分）
+
+# 计算评估指标
+rmse_value = rmse(Y_hat_df['y'], Y_hat_df['PatchTST'])
+rmse_value_adj = rmse(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
+mae_value = mae(Y_hat_df['y'], Y_hat_df['PatchTST'])
+mae_value_adj = mae(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
+mse_value = mse(Y_hat_df['y'], Y_hat_df['PatchTST'])
+mse_value_adj = mse(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
+
+
+
+
+# 计算总拟合数值数量（测试集预测总数）
+total_fitted = len(Y_hat_df)  # 直接取DataFrame的行数
+
+# 打印结果
+print(f'评估指标:')
+print(f'RMSE: {rmse_value:.4f}')
+print(f'MAE: {mae_value:.4f}')
+print(f'MSE: {mse_value:.4f}')
+
+print(f'RMSE: {rmse_value_adj:.4f}')
+print(f'MAE: {mae_value_adj:.4f}')
+print(f'MSE: {mse_value_adj:.4f}')
+
+
+print(f'总拟合数值数量: {total_fitted}')  # 新增输出行
+
+print("阈值文件起始日期:", threshold_df['ds'].min())
+print("预测数据起始日期:", Y_hat_df['ds'].min())
+
+plt.xlabel('Date')
+plt.ylabel('Stock Price')
+plt.title('Stock Price Prediction using PatchTST')
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
