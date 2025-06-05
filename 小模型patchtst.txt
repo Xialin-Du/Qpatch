@@ -13,7 +13,7 @@ torch.set_float32_matmul_precision('medium')
 torch.manual_seed(42)
 np.random.seed(42)
 
-# 数据读取部分，在实验环节中，可根据需要进行替换
+# 数据读取
 df = pd.read_excel('data.xlsx')
 df['unique_id'] = 1
 df = df.rename(columns={'date': 'ds', 'Close': 'y'})
@@ -108,7 +108,7 @@ mae_value_adj = mae(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
 mse_value = mse(Y_hat_df['y'], Y_hat_df['PatchTST'])
 mse_value_adj = mse(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
 
-total_fitted = len(Y_hat_df)  # 直接取DataFrame的行数
+total_fitted = len(Y_hat_df)  
 
 print(f'评估指标:')
 print(f'RMSE: {rmse_value:.4f}')
@@ -117,7 +117,7 @@ print(f'MSE: {mse_value:.4f}')
 print(f'RMSE: {rmse_value_adj:.4f}')
 print(f'MAE: {mae_value_adj:.4f}')
 print(f'MSE: {mse_value_adj:.4f}')
-print(f'总拟合数值数量: {total_fitted}')  # 新增输出行
+print(f'总拟合数值数量: {total_fitted}')  
 print("阈值文件起始日期:", threshold_df['ds'].min())
 print("预测数据起始日期:", Y_hat_df['ds'].min())
 plt.xlabel('Date')
