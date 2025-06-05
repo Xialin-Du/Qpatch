@@ -65,12 +65,11 @@ Y_hat_df = nf.cross_validation(
 Y_hat_df['y'] = Y_hat_df['y'] * y_std + y_mean
 Y_hat_df['PatchTST'] = Y_hat_df['PatchTST'] * y_std + y_mean
 
-# 读取阈值文件（假设阈值文件包含日期列 'ds'）
+# 读取阈值文件（日期列 'ds'）
 threshold_df = pd.read_excel('yuzhi200.xlsx', usecols=['ds', 'lower', 'upper'])
 threshold_df['ds'] = pd.to_datetime(threshold_df['ds'])
 
 print("阈值文件前5个日期:\n", threshold_df['ds'].head().to_string(index=False))
-# 打印预测数据的前5个日期
 print("\n预测数据前5个日期:\n", Y_hat_df['ds'].head().to_string(index=False))
 
 
@@ -84,7 +83,6 @@ def adjust_prediction(row):
     pred = row['PatchTST']
     lower = row['lower']
     upper = row['upper']
-    # 只有当预测值超出阈值时才调整
     if pred < lower:
         return lower
     elif pred > upper:
@@ -120,8 +118,6 @@ plt.plot(Y_plot['ds'], Y_plot['PatchTST'], label='PatchTST', alpha=0.7)
 plt.plot(Y_plot['ds'], Y_plot['adjusted_PatchTST'], label='adjusted_PatchTST', alpha=0.7)
 
 
-# ...（前面的代码保持不变，直到评估指标部分）
-
 # 计算评估指标
 rmse_value = rmse(Y_hat_df['y'], Y_hat_df['PatchTST'])
 rmse_value_adj = rmse(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
@@ -129,14 +125,9 @@ mae_value = mae(Y_hat_df['y'], Y_hat_df['PatchTST'])
 mae_value_adj = mae(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
 mse_value = mse(Y_hat_df['y'], Y_hat_df['PatchTST'])
 mse_value_adj = mse(Y_hat_df['y'], Y_hat_df['adjusted_PatchTST'])
+# 计算总拟合数值数量
+total_fitted = len(Y_hat_df)  
 
-
-
-
-# 计算总拟合数值数量（测试集预测总数）
-total_fitted = len(Y_hat_df)  # 直接取DataFrame的行数
-
-# 打印结果
 print(f'评估指标:')
 print(f'RMSE: {rmse_value:.4f}')
 print(f'MAE: {mae_value:.4f}')
@@ -147,8 +138,7 @@ print(f'MAE: {mae_value_adj:.4f}')
 print(f'MSE: {mse_value_adj:.4f}')
 
 
-print(f'总拟合数值数量: {total_fitted}')  # 新增输出行
-
+print(f'总拟合数值数量: {total_fitted}')  
 print("阈值文件起始日期:", threshold_df['ds'].min())
 print("预测数据起始日期:", Y_hat_df['ds'].min())
 
