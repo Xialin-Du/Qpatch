@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import pandas as pd
 import numpy as np
 import requests
@@ -17,19 +16,14 @@ WINDOW_SIZE = 24
 MAX_RETRIES = 3
 
 def prepare_data():
-    # 数据加载与处理
     df = pd.read_excel(EXCEL_PATH)
     target_col = df.select_dtypes(include=np.number).columns[0]
-    
-    # 保留完整数据分布（移除极端值过滤）
     train = df[target_col].iloc[:-1210].values.astype(np.float32)
     valid = df[target_col].iloc[-1210 - WINDOW_SIZE:].values.astype(np.float32)
     
-    # 标准化处理（保留负值能力）
     scaler = StandardScaler()
     train_scaled = scaler.fit_transform(train.reshape(-1, 1))
-    valid_scaled = scaler.transform(valid.reshape(-1, 1))
-    
+    valid_scaled = scaler.transform(valid.reshape(-1, 1))    
     return scaler, train_scaled, valid_scaled
 
 def create_sequences(data, window_size):
@@ -40,35 +34,21 @@ def create_sequences(data, window_size):
     return np.array(X).squeeze(), np.array(y).squeeze()
 
 def trend_analysis(sequence):
-    """改进的趋势分析算法"""
-    # 使用双重窗口分析
     short_window = sequence[-5:]  # 短期趋势分析
     long_window = sequence[-15:]  # 长期趋势分析
     
     # 计算斜率变化率
     short_slope = np.polyfit(np.arange(5), short_window, 1)[0]
     long_slope = np.polyfit(np.arange(15), long_window, 1)[0]
-    
-    # 动态阈值机制
-    volatility = np.std(long_window) * 1.5  # 波动率阈值
-    
-    # 趋势强度计算
+    volatility = np.std(long_window) * 1.5  # 波动率阈值    
     trend_strength = abs(short_slope - long_slope)
-    is_trend_change = trend_strength > volatility
-    
-    # 方向判断（3:2加权）
-    direction = 1 if (0.6*short_slope + 0.4*long_slope) > 0 else -1
-    
+    is_trend_change = trend_strength > volatility    
+    direction = 1 if (0.6*short_slope + 0.4*long_slope) > 0 else -1    
     return is_trend_change, direction, abs(short_slope)
 
 def adaptive_predictor(history):
-    """改进的自适应预测器"""
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    
-    # 趋势分析（获取趋势变化、方向、强度）
     trend_change, direction, strength = trend_analysis(history)
-    
-    # 动态提示生成
     if trend_change:
         if direction > 0:
             prompt = f"""WARNING: Significant upward trend detected (strength: {strength:.3f})
@@ -84,14 +64,14 @@ Last 5 values: {history[-5:]}
 Output format: 0.123
 Prediction: """
             adjustment = 1 - min(0.5, strength * 2)
-        temperature = 0.4  # 较高创造性
+        temperature = 0.4  
     else:
         prompt = f"""Predict next value within normal fluctuation. 
 Last 8 values: {history[-8:]}
 Output format: 0.456
 Prediction: """
         adjustment = 1.0
-        temperature = 0.1  # 较低随机性
+        temperature = 0.1  
     
     for _ in range(MAX_RETRIES):
         try:
@@ -109,43 +89,35 @@ Prediction: """
             
             if response.status_code == 200:
                 content = json.loads(response.text)['choices'][0]['message']['content']
-                # 强化数值提取逻辑
                 numbers = []
                 for s in content.replace(',',' ').split():
                     if s.count('.') < 2 and s.replace('.','',1).lstrip('-').isdigit():
                         numbers.append(float(s))
                 if numbers:
                     raw_pred = numbers[0]
-                    # 应用动态调整
                     adjusted_pred = raw_pred * adjustment
-                    # 限制极端异常值（基于3sigma原则）
                     baseline = np.mean(history[-10:])
                     bound = np.std(history[-10:]) * 3.8
                     final_pred = max(baseline - bound, min(baseline + bound, adjusted_pred))
                     return final_pred
         except Exception as e:
             continue
-    # 容错机制：返回加权移动平均
     return 0.8 * np.mean(history[-3:]) + 0.2 * np.mean(history[-10:-5])
 
 def main():
-    # 数据准备
     scaler, train_scaled, valid_scaled = prepare_data()
     X_valid, y_valid = create_sequences(valid_scaled, WINDOW_SIZE)
-    
-    # 执行预测
+   
     predictions = []
     for seq in tqdm(X_valid, desc="Predicting"):
         pred = adaptive_predictor(seq)
         predictions.append(pred)
     
-    # 反标准化
     predictions = scaler.inverse_transform(np.array(predictions).reshape(-1,1))
     y_true = scaler.inverse_transform(y_valid.reshape(-1,1))
     
-    # 改进的评估指标
     delta = np.abs(y_true - predictions)
-    relative_error = delta / (np.abs(y_true) + 1e-8)  # 避免除零
+    relative_error = delta / (np.abs(y_true) + 1e-8)  
     p50_error = np.percentile(relative_error, 50)
     p95_error = np.percentile(relative_error, 95)
     
@@ -161,19 +133,14 @@ def main():
         'Predicted_Value': predictions.squeeze()
     })
     
-    # 保存到带时间戳的文件名
     from datetime import datetime
     filename = f"423predictions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     results_df.to_excel(filename, index=False)
     print(f"\n预测结果已保存至: {filename}")
 
-
-
-    
-    # 增强可视化
+  
     plt.figure(figsize=(24, 12))
-    
-    # 带趋势带的可视化
+   
     plt.subplot(2,1,1)
     plt.plot(y_true, label='true', color='dodgerblue', alpha=0.8)
     plt.plot(predictions, label='predict', color='darkorange', linestyle='--')
@@ -184,7 +151,6 @@ def main():
     plt.title("全局趋势对比（含5%预测区间）", fontsize=14)
     plt.legend()
     
-    # 动态误差分析
     plt.subplot(2,1,2)
     error = (predictions - y_true).squeeze()
     plt.plot(error, color='green', alpha=0.6, label='预测误差')
